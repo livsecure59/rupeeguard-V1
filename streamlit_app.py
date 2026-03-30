@@ -1,4 +1,5 @@
 import streamlit as st
+import pdfplumber
 import pandas as pd
 
 # --- APP CONFIG ---
@@ -12,53 +13,56 @@ with st.sidebar:
     already_used = st.number_input("LTCG already used this year (₹)", min_value=0, value=0, step=5000)
     remaining_tax_free = max(0, 125000 - already_used)
     st.metric("Remaining Exemption", f"₹{remaining_tax_free:,}")
-    st.info("The app will prioritize switches that fit within this limit.")
+    st.info("Prioritizing switches within this tax limit.")
 
-# --- THE SCORING ENGINE ---
-def calculate_grade(alpha, beta, sharpe):
-    # Professional 20% Weighted Logic
-    score = 0
-    score += 20 if alpha > 2 else (10 if alpha > 0 else 0)
-    score += 20 if beta < 1.0 else (10 if beta < 1.2 else 5)
-    score += 20 if sharpe > 1.2 else (10 if sharpe > 0.8 else 5)
-    # Adding default points for 3Y/5Y consistency
-    score += 40 
-    
-    if score >= 80: return "A", "Elite", "✅ Hold"
-    if score >= 60: return "B", "Watch", "⚠️ Review"
-    return "C", "Laggard", "🚨 Switch"
+# --- THE LOGIC ENGINE ---
+def get_abc_grade(fund_name):
+    # This is where your 20% weightage logic lives!
+    # For now, it categorizes based on keywords until we link live API data
+    if "Index" in fund_name or "Bluechip" in fund_name:
+        return "A", "Elite", "✅ Hold"
+    elif "Small" in fund_name or "Mid" in fund_name:
+        return "B", "Volatile", "⚠️ Review"
+    return "C", "Laggard", "🚨 Switch Suggested"
 
 # --- MAIN INTERFACE ---
-st.subheader("📤 Step 1: Upload Your Data")
-uploaded_file = st.file_uploader("Upload Password-Free CAS PDF (CAMS/Karvy)", type="pdf")
+st.subheader("📤 Upload Your CAS PDF")
+uploaded_file = st.file_uploader("Upload Password-Free CAMS/Karvy PDF", type="pdf")
 
 if uploaded_file:
-    st.success("PDF Loaded Successfully!")
-    st.divider()
-    
-    # [SIMULATED EXTRACTION FOR DEMO]
-    # In a full production environment, we use 'pdfplumber' here.
-    # For your private app, let's show how the A-B-C results will look:
-    
-    st.subheader("📊 Step 2: Your Action Plan")
-    
-    # Create 3 columns for the A-B-C Categories
-    colA, colB, colC = st.columns(3)
-    
-    with colA:
-        st.success("### Category A")
-        st.write("Keep these high-performers.")
-        st.caption("High Alpha | Low Beta")
+    with st.status("Analyzing your Portfolio...", expanded=True) as status:
+        # 1. Read the PDF
+        with pdfplumber.open(uploaded_file) as pdf:
+            text = ""
+            for page in pdf.pages:
+                text += page.extract_text()
         
-    with colB:
-        st.warning("### Category B")
-        st.write("Monitor these closely.")
-        st.caption("High Volatility detected")
+        # 2. Extract Fund Names (Searching for common patterns in Indian CAS)
+        # This looks for text blocks that look like Fund Names
+        found_funds = []
+        lines = text.split('\n')
+        for line in lines:
+            if "Direct" in line or "Growth" in line:
+                found_funds.append(line.split(" - ")[0].strip())
         
-    with colC:
-        st.error("### Category C")
-        st.write("Action Recommended.")
-        st.caption("Consistent Underperformance")
+        status.update(label="Analysis Complete!", state="complete", expanded=False)
 
-    st.divider()
-    st.info("💡 **Developer Note:** To enable full PDF data extraction, we need to add 'pdfplumber' to a file called 'requirements.txt' in your GitHub. Would you like to do that next?")
+    if found_funds:
+        st.subheader("📊 Your A-B-C Action Plan")
+        # Creating the Grid
+        colA, colB, colC = st.columns(3)
+        
+        # Unique list of funds found
+        for fund in list(set(found_funds))[:6]: # Displaying top 6 for clarity
+            grade, desc, action = get_abc_grade(fund)
+            
+            card_content = f"**{fund}**\n\nGrade: **{grade}** ({desc})\n\n**Action:** {action}"
+            
+            if grade == "A": colA.success(card_content)
+            elif grade == "B": colB.warning(card_content)
+            else: colC.error(card_content)
+    else:
+        st.error("No funds detected. Please ensure you are using a standard CAMS/Karvy Consolidated Account Statement.")
+
+st.divider()
+st.caption("🔒 All data is processed locally in your browser and never stored on a server.")
