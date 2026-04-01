@@ -4,7 +4,7 @@ import pdfplumber
 
 # --- 1. THE CONNECTION ---
 # PASTE YOUR GOOGLE SHEET CSV URL HERE
-MASTER_SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQj5Gd2cIhbbhYnwC53Hxone3N2Z748xgfAXVireSkd2sx_prhaXCGDjI5QnbtSb1jwT6tXQOhew36I/pub?gid=1157758174&single=true&output=csv"
+MASTER_SHEET_URL = "MASTER_SHEET_URL = "https://docs.google.com/spreadsheets/d/1HhEYGGuxXAWYTA2bQBg7pZNM5ZXtUo47GoS7X_sw9To/gviz/tq?tqx=out:csv&sheet=MF%20Assisted%20Sheet"
 
 st.set_page_config(page_title="RupeeGuard Pro", layout="wide")
 st.title("🛡️ RupeeGuard: Absolute Scoring Engine")
