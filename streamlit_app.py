@@ -36,11 +36,18 @@ master_df = load_master_data()
 # --- 3. SCORING ENGINE ---
 def get_strict_score(row):
     try:
+        # Alpha (30pts): 10 pts per 1% Alpha
         s_alpha = min(30, max(0, float(row['Alpha']) * 10)) if float(row['Alpha']) > 0 else 0
+        # Sharpe (25pts): Linear reward above 0.5 baseline
         sharpe = float(row['Sharpe'])
         s_sharpe = min(25, max(0, (sharpe - 0.5) * 31.25)) if sharpe > 0.5 else 0
+        # Beta (15pts): Tiered reward for stability
         beta = float(row['Beta'])
-        s_beta = 15 if beta <= 0.9 else (8 if beta <= 1.1 else (4 if beta <= 1.2 else 0))
+        if beta <= 0.9: s_beta = 15
+        elif beta <= 1.1: s_beta = 8
+        elif beta <= 1.2: s_beta = 4
+        else: s_beta = 0
+        # CAGR (15pts each): Momentum and Consistency
         c3y = float(row['3Y CAGR'])
         s_3y = 15 if c3y >= 18 else (8 if c3y >= 15 else (4 if c3y >= 12 else 0))
         c5y = float(row.get('5Y CAGR', row['3Y CAGR']))
@@ -51,24 +58,76 @@ def get_strict_score(row):
 if not master_df.empty:
     master_df['Calculated Score'] = master_df.apply(get_strict_score, axis=1)
 
-# --- 4. TABS ---
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Portfolio Review", "🗂️ Master Database", "⚖️ Weightage", "🔢 Scoring Logic", "📝 Assumptions"])
+# --- 4. TABS INTERFACE ---
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "📊 Portfolio Review", 
+    "🗂️ Master Database", 
+    "⚖️ Weightage", 
+    "🔢 Scoring Logic",
+    "📝 Assumptions"
+])
 
+# --- TAB 5: ASSUMPTIONS ---
+with tab5:
+    st.subheader("Core Investment Assumptions")
+    st.markdown("""
+    This advisory portal operates on the following institutional-grade assumptions:
+    
+    1. **Filtering Mechanism:** Analysis is strictly restricted to funds indexed in the Master Database. **Debt funds, liquid funds, and unindexed equity funds** are automatically filtered out as 'Non-Actionable' for this specific equity strategy.
+    
+    2. **Alpha (30 Points):** Excess return over the benchmark is the primary driver of value. Every 1% of positive Alpha contributes 10 points. Negative Alpha is treated as a strategic failure and scores 0.
+    
+    3. **Sharpe Ratio (25 Points):** We assume a fund must earn its returns efficiently. A baseline of 0.5 is required; efficiency above this is rewarded linearly up to 1.3.
+    
+    4. **Beta (15 Points):** Lower volatility relative to the market is a virtue. We use a step-down tier:
+        * **≤ 0.9 (Optimal):** 15 pts
+        * **0.91 - 1.1 (Standard):** 8 pts
+        * **1.11 - 1.2 (High Risk):** 4 pts
+        * **> 1.2 (Failure):** 0 pts
+    
+    5. **CAGR Hurdles (15 Points Each):** We assume 18% (3Y) and 15% (5Y) are the benchmarks for high-conviction growth. Funds falling below 12% or 10% respectively receive 0 points for consistency.
+    """)
+
+# --- TAB 4: SCORING LOGIC ---
+with tab4:
+    st.subheader("Numerical Scoring Logic")
+    logic_data = {
+        "Parameter": ["Alpha", "Sharpe", "Beta", "3Y CAGR", "5Y CAGR"],
+        "Max Points": [30, 25, 15, 15, 15],
+        "Zero-Point Hurdle": ["≤ 0.0", "≤ 0.5", "> 1.2", "< 12%", "< 10%"],
+        "Full-Point Target": ["> 3.0", "> 1.3", "≤ 0.9", "> 18%", "> 15%"]
+    }
+    st.table(pd.DataFrame(logic_data))
+
+# --- TAB 3: WEIGHTAGE ---
+with tab3:
+    st.subheader("Weightage Distribution")
+    st.table(pd.DataFrame({
+        "Metric": ["Alpha", "Sharpe Ratio", "Beta", "3Y CAGR", "5Y CAGR"], 
+        "Weight": ["30%", "25%", "15%", "15%", "15%"]
+    }))
+
+# --- TAB 2: MASTER DATABASE ---
+with tab2:
+    st.subheader("Full Database Audit")
+    # Reset index for display
+    display_master = master_df.copy()
+    display_master.index = range(1, len(display_master) + 1)
+    st.dataframe(display_master, use_container_width=True)
+
+# --- TAB 1: REVIEW ---
 with tab1:
     uploaded_file = st.file_uploader("Upload CAS PDF", type="pdf")
     if uploaded_file:
-        with st.spinner("Filtering for Actionable Funds..."):
+        with st.spinner("Isolating Actionable Equity Funds..."):
             holdings = []
             with pdfplumber.open(uploaded_file) as pdf:
                 for page in pdf.pages:
                     words = page.extract_words()
                     target_x = next(((w['x0'] + w['x1'])/2 for w in words if "VALU" in w['text'].upper()), None)
-                    
                     for w in words:
                         if re.search(r"IN[A-Z0-9]{10}", w['text']):
                             isin = w['text']
-                            
-                            # Whitelist check against Master Sheet
                             match = master_df[master_df['ISIN'] == isin]
                             if not match.empty:
                                 y_mid = (w['top'] + w['bottom']) / 2
@@ -82,51 +141,10 @@ with tab1:
                                             fund_val = num
                                             break
                                         elif num > fund_val: fund_val = num
-                                
                                 res = match.iloc[0]
-                                holdings.append({
-                                    "Fund": res['Fund Name'], 
-                                    "Score": res['Calculated Score'], 
-                                    "Value": fund_val, 
-                                    "ISIN": isin
-                                })
+                                holdings.append({"Fund": res['Fund Name'], "Score": res['Calculated Score'], "Value": fund_val, "ISIN": isin})
 
             if holdings:
                 pdf_df = pd.DataFrame(holdings)
-                # Consolidate duplicate ISINs
                 pdf_df = pdf_df.groupby(['Fund', 'ISIN', 'Score'], as_index=False)['Value'].sum()
-                pdf_df = pdf_df.sort_values(by="Score", ascending=False)
-                
-                # Global total for Weightage calculation only
-                actual_total = pdf_df['Value'].sum()
-                pdf_df['% Weight'] = pdf_df['Value'].apply(lambda x: round((x/actual_total)*100, 2) if actual_total > 0 else 0)
-                
-                # Reset index to start from 1
-                pdf_df.index = range(1, len(pdf_df) + 1)
-
-                st.subheader(f"Equity Portfolio Summary (Actionable Funds: {len(pdf_df)})")
-
-                def color_rows(row):
-                    if row.Score >= 90: return ['background-color: #d4edda'] * len(row)
-                    elif row.Score < 30: return ['background-color: #f8d7da'] * len(row)
-                    elif 30 <= row.Score <= 50: return ['background-color: #fff3cd'] * len(row)
-                    else: return [''] * len(row)
-
-                styled_df = pdf_df[['Fund', 'Score', 'Value', '% Weight']].style.apply(color_rows, axis=1).format({'Value': '₹{:,.2f}'})
-                st.dataframe(styled_df, use_container_width=True)
-            else:
-                st.warning("No actionable equity funds from your Master Sheet found. (Debt/Unindexed funds filtered out).")
-
-# --- OTHER TABS ---
-with tab2:
-    master_df.index = range(1, len(master_df) + 1)
-    st.dataframe(master_df, use_container_width=True)
-
-with tab3:
-    st.table(pd.DataFrame({"Metric": ["Alpha", "Sharpe", "Beta", "3Y CAGR", "5Y CAGR"], "Weight": ["30%", "25%", "15%", "15%", "15%"]}))
-
-with tab4:
-    st.table(pd.DataFrame({"Parameter": ["Alpha", "Sharpe", "Beta", "3Y CAGR", "5Y CAGR"], "Max Points": [30, 25, 15, 15, 15], "Hurdle": ["> 0.0", "> 0.5", "< 1.2", "> 12%", "> 10%"]}))
-
-with tab5:
-    st.write("Assumptions: Analysis excludes debt and unindexed funds. Actionable funds are those mapped to your master equity database.")
+                pdf_df = pdf_df
