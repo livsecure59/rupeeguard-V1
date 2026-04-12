@@ -36,18 +36,12 @@ master_df = load_master_data()
 # --- 3. SCORING ENGINE ---
 def get_strict_score(row):
     try:
-        # Alpha (30pts): 10 pts per 1% Alpha
         s_alpha = min(30, max(0, float(row['Alpha']) * 10)) if float(row['Alpha']) > 0 else 0
-        # Sharpe (25pts): Linear reward above 0.5 baseline
         sharpe = float(row['Sharpe'])
+        # Linear reward formula: (Actual - Baseline) * (Total Points / Range)
         s_sharpe = min(25, max(0, (sharpe - 0.5) * 31.25)) if sharpe > 0.5 else 0
-        # Beta (15pts): Tiered reward for stability
         beta = float(row['Beta'])
-        if beta <= 0.9: s_beta = 15
-        elif beta <= 1.1: s_beta = 8
-        elif beta <= 1.2: s_beta = 4
-        else: s_beta = 0
-        # CAGR (15pts each): Momentum and Consistency
+        s_beta = 15 if beta <= 0.9 else (8 if beta <= 1.1 else (4 if beta <= 1.2 else 0))
         c3y = float(row['3Y CAGR'])
         s_3y = 15 if c3y >= 18 else (8 if c3y >= 15 else (4 if c3y >= 12 else 0))
         c5y = float(row.get('5Y CAGR', row['3Y CAGR']))
@@ -69,26 +63,32 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 
 # --- TAB 5: ASSUMPTIONS ---
 with tab5:
-    st.subheader("Core Investment Assumptions")
+    st.subheader("Core Investment Assumptions & Formulas")
     st.markdown("""
-    This advisory portal operates on the following institutional-grade assumptions:
-    
-    1. **Filtering Mechanism:** Analysis is strictly restricted to funds indexed in the Master Database. **Debt funds, liquid funds, and unindexed equity funds** are automatically filtered out as 'Non-Actionable' for this specific equity strategy.
-    
-    2. **Alpha (30 Points):** Excess return over the benchmark is the primary driver of value. Every 1% of positive Alpha contributes 10 points. Negative Alpha is treated as a strategic failure and scores 0.
-    
-    3. **Sharpe Ratio (25 Points):** We assume a fund must earn its returns efficiently. A baseline of 0.5 is required; efficiency above this is rewarded linearly up to 1.3.
-    
-    4. **Beta (15 Points):** Lower volatility relative to the market is a virtue. We use a step-down tier:
-        * **≤ 0.9 (Optimal):** 15 pts
-        * **0.91 - 1.1 (Standard):** 8 pts
-        * **1.11 - 1.2 (High Risk):** 4 pts
-        * **> 1.2 (Failure):** 0 pts
-    
-    5. **CAGR Hurdles (15 Points Each):** We assume 18% (3Y) and 15% (5Y) are the benchmarks for high-conviction growth. Funds falling below 12% or 10% respectively receive 0 points for consistency.
+    ### 1. Sharpe Ratio Efficiency (25 Points)
+    We assume a fund must earn its returns efficiently. A baseline of **0.5** is required to earn any points.
+    * **Formula:** $Score = (Actual Sharpe - 0.5) \\times 31.25$
+    * *Max points (25) reached at Sharpe 1.3.*
+
+    ### 2. Alpha Generation (30 Points)
+    We assume excess return is the primary performance driver.
+    * **Formula:** $Score = Actual Alpha \\times 10$
+    * *Max points (30) reached at Alpha 3.0. Negative Alpha = 0.*
+
+    ### 3. Beta / Volatility (15 Points)
+    We assume lower volatility is a virtue. Rewards are tiered:
+    * **≤ 0.9:** 15 pts | **0.91-1.1:** 8 pts | **1.11-1.2:** 4 pts | **> 1.2:** 0 pts
+
+    ### 4. CAGR Momentum (15 Pts Each)
+    * **3Y CAGR:** Full points (15) for $\ge$ 18%. 0 points if < 12%.
+    * **5Y CAGR:** Full points (15) for $\ge$ 15%. 0 points if < 10%.
+
+    ### 5. Filtering Rules
+    * **Debt/Liquid Funds:** Automatically excluded as non-actionable.
+    * **Unindexed Funds:** Any fund not present in the Master Database is ignored.
     """)
 
-# --- TAB 4: SCORING LOGIC ---
+# --- TAB 4: LOGIC ---
 with tab4:
     st.subheader("Numerical Scoring Logic")
     logic_data = {
@@ -110,7 +110,6 @@ with tab3:
 # --- TAB 2: MASTER DATABASE ---
 with tab2:
     st.subheader("Full Database Audit")
-    # Reset index for display
     display_master = master_df.copy()
     display_master.index = range(1, len(display_master) + 1)
     st.dataframe(display_master, use_container_width=True)
@@ -119,7 +118,7 @@ with tab2:
 with tab1:
     uploaded_file = st.file_uploader("Upload CAS PDF", type="pdf")
     if uploaded_file:
-        with st.spinner("Isolating Actionable Equity Funds..."):
+        with st.spinner("Analyzing Actionable Funds..."):
             holdings = []
             with pdfplumber.open(uploaded_file) as pdf:
                 for page in pdf.pages:
@@ -147,4 +146,18 @@ with tab1:
             if holdings:
                 pdf_df = pd.DataFrame(holdings)
                 pdf_df = pdf_df.groupby(['Fund', 'ISIN', 'Score'], as_index=False)['Value'].sum()
-                pdf_df = pdf_df
+                pdf_df = pdf_df.sort_values(by="Score", ascending=False)
+                
+                total_for_weight = pdf_df['Value'].sum()
+                pdf_df['% Weight'] = pdf_df['Value'].apply(lambda x: round((x/total_for_weight)*100, 2) if total_for_weight > 0 else 0)
+                pdf_df.index = range(1, len(pdf_df) + 1)
+
+                st.subheader(f"Equity Portfolio Summary (Actionable Funds: {len(pdf_df)})")
+
+                def color_rows(row):
+                    if row.Score >= 90: return ['background-color: #d4edda'] * len(row)
+                    elif row.Score < 30: return ['background-color: #f8d7da'] * len(row)
+                    elif 30 <= row.Score <= 50: return ['background-color: #fff3cd'] * len(row)
+                    else: return [''] * len(row)
+
+                styled_df = pdf_df[['Fund', 'Score',
