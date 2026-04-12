@@ -57,7 +57,7 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Portfolio Review", "🗂️ Master
 with tab1:
     uploaded_file = st.file_uploader("Upload CAS PDF", type="pdf")
     if uploaded_file:
-        with st.spinner("Filtering Debt Funds & analyzing Equity holdings..."):
+        with st.spinner("Filtering for Actionable Funds..."):
             holdings = []
             with pdfplumber.open(uploaded_file) as pdf:
                 for page in pdf.pages:
@@ -68,8 +68,7 @@ with tab1:
                         if re.search(r"IN[A-Z0-9]{10}", w['text']):
                             isin = w['text']
                             
-                            # --- DEBT FILTER LOGIC ---
-                            # Only proceed if the ISIN exists in our Master Sheet
+                            # Whitelist check against Master Sheet
                             match = master_df[master_df['ISIN'] == isin]
                             if not match.empty:
                                 y_mid = (w['top'] + w['bottom']) / 2
@@ -93,18 +92,19 @@ with tab1:
                                 })
 
             if holdings:
-                # Remove duplicates by ISIN and sum values (if same fund held in multiple folios)
                 pdf_df = pd.DataFrame(holdings)
+                # Consolidate duplicate ISINs
                 pdf_df = pdf_df.groupby(['Fund', 'ISIN', 'Score'], as_index=False)['Value'].sum()
                 pdf_df = pdf_df.sort_values(by="Score", ascending=False)
                 
+                # Global total for Weightage calculation only
+                actual_total = pdf_df['Value'].sum()
+                pdf_df['% Weight'] = pdf_df['Value'].apply(lambda x: round((x/actual_total)*100, 2) if actual_total > 0 else 0)
+                
                 # Reset index to start from 1
                 pdf_df.index = range(1, len(pdf_df) + 1)
-                
-                total_val = pdf_df['Value'].sum()
-                pdf_df['% Weight'] = pdf_df['Value'].apply(lambda x: round((x/total_val)*100, 2) if total_val > 0 else 0)
 
-                st.subheader(f"Equity Portfolio Summary (Analyzed: {len(pdf_df)} Funds | Total Value: ₹{total_val:,.2f})")
+                st.subheader(f"Equity Portfolio Summary (Actionable Funds: {len(pdf_df)})")
 
                 def color_rows(row):
                     if row.Score >= 90: return ['background-color: #d4edda'] * len(row)
@@ -115,9 +115,9 @@ with tab1:
                 styled_df = pdf_df[['Fund', 'Score', 'Value', '% Weight']].style.apply(color_rows, axis=1).format({'Value': '₹{:,.2f}'})
                 st.dataframe(styled_df, use_container_width=True)
             else:
-                st.warning("No matching funds from your Master Sheet found in the PDF. Debt funds have been filtered out.")
+                st.warning("No actionable equity funds from your Master Sheet found. (Debt/Unindexed funds filtered out).")
 
-# --- REMAINING TABS REMAIN UNCHANGED FOR CONSISTENCY ---
+# --- OTHER TABS ---
 with tab2:
     master_df.index = range(1, len(master_df) + 1)
     st.dataframe(master_df, use_container_width=True)
@@ -129,4 +129,4 @@ with tab4:
     st.table(pd.DataFrame({"Parameter": ["Alpha", "Sharpe", "Beta", "3Y CAGR", "5Y CAGR"], "Max Points": [30, 25, 15, 15, 15], "Hurdle": ["> 0.0", "> 0.5", "< 1.2", "> 12%", "> 10%"]}))
 
 with tab5:
-    st.write("Assumptions: Debt funds are excluded. Analysis only covers funds indexed in the Master Database.")
+    st.write("Assumptions: Analysis excludes debt and unindexed funds. Actionable funds are those mapped to your master equity database.")
