@@ -64,15 +64,16 @@ with tab5:
     st.subheader("Core Investment Assumptions & Formulas")
     st.markdown("""
     ### 1. Sharpe Ratio Efficiency (25 Points)
-    Baseline of **0.5** required. **Formula:** $Score = (Actual Sharpe - 0.5) \\times 31.25$
+    Baseline of **0.5** required. 
+    * **Formula:** $Score = (Actual Sharpe - 0.5) \\times 31.25$
     ### 2. Alpha Generation (30 Points)
     **Formula:** $Score = Actual Alpha \\times 10$ (Max at 3.0)
     ### 3. Beta / Volatility (15 Points)
-    ≤ 0.9: 15 pts | 0.91-1.1: 8 pts | 1.11-1.2: 4 pts | > 1.2: 0 pts
+    * ≤ 0.9: **15 pts** | 0.91-1.1: **8 pts** | 1.11-1.2: **4 pts** | > 1.2: **0 pts**
     ### 4. CAGR Momentum (15 Pts Each)
-    3Y: 15 pts if ≥ 18% | 5Y: 15 pts if ≥ 15%
+    * **3Y:** 15 pts if ≥ 18% | **5Y:** 15 pts if ≥ 15%
     ### 5. Filtering Rules
-    Only funds in Master Database are 'Actionable'. Debt/Liquid funds are filtered out.
+    Only funds indexed in the Master Database are considered 'Actionable'. Debt and liquid funds are filtered out.
     """)
 
 with tab4:
@@ -103,7 +104,6 @@ with tab1:
             with pdfplumber.open(uploaded_file) as pdf:
                 for page in pdf.pages:
                     words = page.extract_words()
-                    # Find horizontal center of 'VALU' header
                     target_x = None
                     for w in words:
                         if "VALU" in w['text'].upper():
@@ -117,13 +117,11 @@ with tab1:
                             if not match.empty:
                                 y_mid = (w['top'] + w['bottom']) / 2
                                 fund_val = 0
-                                # Look for value on same row (within 15px)
                                 for n in words:
                                     if abs(((n['top'] + n['bottom']) / 2) - y_mid) < 15:
                                         clean = n['text'].replace(',', '')
                                         if re.match(r"^\d+\.\d{2}$", clean):
                                             num = float(clean)
-                                            # Prioritize VALU column alignment
                                             if target_x and abs(((n['x0'] + n['x1']) / 2) - target_x) < 80:
                                                 fund_val = num
                                                 break
@@ -139,6 +137,4 @@ with tab1:
                 
                 total_for_weight = pdf_df['Value'].sum()
                 pdf_df['% Weight'] = pdf_df['Value'].apply(lambda x: round((x/total_for_weight)*100, 2) if total_for_weight > 0 else 0)
-                pdf_df.index = range(1, len(pdf_df) + 1)
-
-                st.
+                pdf_
