@@ -38,7 +38,6 @@ def get_strict_score(row):
     try:
         s_alpha = min(30, max(0, float(row['Alpha']) * 10)) if float(row['Alpha']) > 0 else 0
         sharpe = float(row['Sharpe'])
-        # Linear reward formula: (Actual - Baseline) * (Total Points / Range)
         s_sharpe = min(25, max(0, (sharpe - 0.5) * 31.25)) if sharpe > 0.5 else 0
         beta = float(row['Beta'])
         s_beta = 15 if beta <= 0.9 else (8 if beta <= 1.1 else (4 if beta <= 1.2 else 0))
@@ -123,41 +122,4 @@ with tab1:
             with pdfplumber.open(uploaded_file) as pdf:
                 for page in pdf.pages:
                     words = page.extract_words()
-                    target_x = next(((w['x0'] + w['x1'])/2 for w in words if "VALU" in w['text'].upper()), None)
-                    for w in words:
-                        if re.search(r"IN[A-Z0-9]{10}", w['text']):
-                            isin = w['text']
-                            match = master_df[master_df['ISIN'] == isin]
-                            if not match.empty:
-                                y_mid = (w['top'] + w['bottom']) / 2
-                                row_values = [n for n in words if abs(((n['top']+n['bottom'])/2) - y_mid) < 15]
-                                fund_val = 0
-                                for n in row_values:
-                                    clean = n['text'].replace(',', '')
-                                    if re.match(r"^\d+\.\d{2}$", clean):
-                                        num = float(clean)
-                                        if target_x and abs(((n['x0']+n['x1'])/2) - target_x) < 80:
-                                            fund_val = num
-                                            break
-                                        elif num > fund_val: fund_val = num
-                                res = match.iloc[0]
-                                holdings.append({"Fund": res['Fund Name'], "Score": res['Calculated Score'], "Value": fund_val, "ISIN": isin})
-
-            if holdings:
-                pdf_df = pd.DataFrame(holdings)
-                pdf_df = pdf_df.groupby(['Fund', 'ISIN', 'Score'], as_index=False)['Value'].sum()
-                pdf_df = pdf_df.sort_values(by="Score", ascending=False)
-                
-                total_for_weight = pdf_df['Value'].sum()
-                pdf_df['% Weight'] = pdf_df['Value'].apply(lambda x: round((x/total_for_weight)*100, 2) if total_for_weight > 0 else 0)
-                pdf_df.index = range(1, len(pdf_df) + 1)
-
-                st.subheader(f"Equity Portfolio Summary (Actionable Funds: {len(pdf_df)})")
-
-                def color_rows(row):
-                    if row.Score >= 90: return ['background-color: #d4edda'] * len(row)
-                    elif row.Score < 30: return ['background-color: #f8d7da'] * len(row)
-                    elif 30 <= row.Score <= 50: return ['background-color: #fff3cd'] * len(row)
-                    else: return [''] * len(row)
-
-                styled_df = pdf_df[['Fund', 'Score',
+                    target_x = next(((w['x0'] + w['x1'])/2 for w
