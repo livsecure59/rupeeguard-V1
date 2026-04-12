@@ -60,34 +60,21 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📝 Assumptions"
 ])
 
-# --- TAB 5: ASSUMPTIONS ---
 with tab5:
     st.subheader("Core Investment Assumptions & Formulas")
     st.markdown("""
     ### 1. Sharpe Ratio Efficiency (25 Points)
-    We assume a fund must earn its returns efficiently. A baseline of **0.5** is required to earn any points.
-    * **Formula:** $Score = (Actual Sharpe - 0.5) \\times 31.25$
-    * *Max points (25) reached at Sharpe 1.3.*
-
+    Baseline of **0.5** required. **Formula:** $Score = (Actual Sharpe - 0.5) \\times 31.25$
     ### 2. Alpha Generation (30 Points)
-    We assume excess return is the primary performance driver.
-    * **Formula:** $Score = Actual Alpha \\times 10$
-    * *Max points (30) reached at Alpha 3.0. Negative Alpha = 0.*
-
+    **Formula:** $Score = Actual Alpha \\times 10$ (Max at 3.0)
     ### 3. Beta / Volatility (15 Points)
-    We assume lower volatility is a virtue. Rewards are tiered:
-    * **≤ 0.9:** 15 pts | **0.91-1.1:** 8 pts | **1.11-1.2:** 4 pts | **> 1.2:** 0 pts
-
+    ≤ 0.9: 15 pts | 0.91-1.1: 8 pts | 1.11-1.2: 4 pts | > 1.2: 0 pts
     ### 4. CAGR Momentum (15 Pts Each)
-    * **3Y CAGR:** Full points (15) for $\ge$ 18%. 0 points if < 12%.
-    * **5Y CAGR:** Full points (15) for $\ge$ 15%. 0 points if < 10%.
-
+    3Y: 15 pts if ≥ 18% | 5Y: 15 pts if ≥ 15%
     ### 5. Filtering Rules
-    * **Debt/Liquid Funds:** Automatically excluded as non-actionable.
-    * **Unindexed Funds:** Any fund not present in the Master Database is ignored.
+    Only funds in Master Database are 'Actionable'. Debt/Liquid funds are filtered out.
     """)
 
-# --- TAB 4: LOGIC ---
 with tab4:
     st.subheader("Numerical Scoring Logic")
     logic_data = {
@@ -98,22 +85,16 @@ with tab4:
     }
     st.table(pd.DataFrame(logic_data))
 
-# --- TAB 3: WEIGHTAGE ---
 with tab3:
     st.subheader("Weightage Distribution")
-    st.table(pd.DataFrame({
-        "Metric": ["Alpha", "Sharpe Ratio", "Beta", "3Y CAGR", "5Y CAGR"], 
-        "Weight": ["30%", "25%", "15%", "15%", "15%"]
-    }))
+    st.table(pd.DataFrame({"Metric": ["Alpha", "Sharpe", "Beta", "3Y CAGR", "5Y CAGR"], "Weight": ["30%", "25%", "15%", "15%", "15%"]}))
 
-# --- TAB 2: MASTER DATABASE ---
 with tab2:
     st.subheader("Full Database Audit")
     display_master = master_df.copy()
     display_master.index = range(1, len(display_master) + 1)
     st.dataframe(display_master, use_container_width=True)
 
-# --- TAB 1: REVIEW ---
 with tab1:
     uploaded_file = st.file_uploader("Upload CAS PDF", type="pdf")
     if uploaded_file:
@@ -122,4 +103,42 @@ with tab1:
             with pdfplumber.open(uploaded_file) as pdf:
                 for page in pdf.pages:
                     words = page.extract_words()
-                    target_x = next(((w['x0'] + w['x1'])/2 for w
+                    # Find horizontal center of 'VALU' header
+                    target_x = None
+                    for w in words:
+                        if "VALU" in w['text'].upper():
+                            target_x = (w['x0'] + w['x1']) / 2
+                            break
+                    
+                    for w in words:
+                        if re.search(r"IN[A-Z0-9]{10}", w['text']):
+                            isin = w['text']
+                            match = master_df[master_df['ISIN'] == isin]
+                            if not match.empty:
+                                y_mid = (w['top'] + w['bottom']) / 2
+                                fund_val = 0
+                                # Look for value on same row (within 15px)
+                                for n in words:
+                                    if abs(((n['top'] + n['bottom']) / 2) - y_mid) < 15:
+                                        clean = n['text'].replace(',', '')
+                                        if re.match(r"^\d+\.\d{2}$", clean):
+                                            num = float(clean)
+                                            # Prioritize VALU column alignment
+                                            if target_x and abs(((n['x0'] + n['x1']) / 2) - target_x) < 80:
+                                                fund_val = num
+                                                break
+                                            elif num > fund_val: fund_val = num
+                                
+                                res = match.iloc[0]
+                                holdings.append({"Fund": res['Fund Name'], "Score": res['Calculated Score'], "Value": fund_val, "ISIN": isin})
+
+            if holdings:
+                pdf_df = pd.DataFrame(holdings)
+                pdf_df = pdf_df.groupby(['Fund', 'ISIN', 'Score'], as_index=False)['Value'].sum()
+                pdf_df = pdf_df.sort_values(by="Score", ascending=False)
+                
+                total_for_weight = pdf_df['Value'].sum()
+                pdf_df['% Weight'] = pdf_df['Value'].apply(lambda x: round((x/total_for_weight)*100, 2) if total_for_weight > 0 else 0)
+                pdf_df.index = range(1, len(pdf_df) + 1)
+
+                st.
