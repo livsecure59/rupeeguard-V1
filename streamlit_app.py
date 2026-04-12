@@ -36,148 +36,120 @@ master_df = load_master_data()
 # --- 3. SCORING ENGINE ---
 def get_strict_score(row):
     try:
-        # Alpha (30pts): Max at 3.0. Formula: Alpha * 10
         s_alpha = min(30, max(0, float(row['Alpha']) * 10)) if float(row['Alpha']) > 0 else 0
-        
-        # Sharpe (25pts): Linear reward above 0.5 baseline up to 1.3
-        # Logic: 25 points divided by 0.8 range = 31.25 multiplier
         sharpe = float(row['Sharpe'])
         s_sharpe = min(25, max(0, (sharpe - 0.5) * 31.25)) if sharpe > 0.5 else 0
-        
-        # Beta (15pts): Tiered reward
         beta = float(row['Beta'])
-        if beta <= 0.9: s_beta = 15
-        elif beta <= 1.1: s_beta = 8
-        elif beta <= 1.2: s_beta = 4
-        else: s_beta = 0
-        
-        # CAGR (15pts each): Hurdles for 18% (3Y) and 15% (5Y)
+        s_beta = 15 if beta <= 0.9 else (8 if beta <= 1.1 else (4 if beta <= 1.2 else 0))
         c3y = float(row['3Y CAGR'])
         s_3y = 15 if c3y >= 18 else (8 if c3y >= 15 else (4 if c3y >= 12 else 0))
         c5y = float(row.get('5Y CAGR', row['3Y CAGR']))
         s_5y = 15 if c5y >= 15 else (8 if c5y >= 12 else (4 if c5y >= 10 else 0))
-        
         return round(s_alpha + s_beta + s_sharpe + s_3y + s_5y, 1)
     except: return 0.0
 
 if not master_df.empty:
     master_df['Calculated Score'] = master_df.apply(get_strict_score, axis=1)
 
-# --- 4. TABS INTERFACE ---
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📊 Portfolio Review", 
-    "🗂️ Master Database", 
-    "⚖️ Weightage", 
-    "🔢 Scoring Logic",
-    "📝 Assumptions"
-])
+# --- 4. DATA EXTRACTION LOGIC ---
+raw_cas_data = [] # Global-ish list to store all detected funds for reconciliation
+actionable_holdings = []
 
-# --- TAB 5: ASSUMPTIONS ---
-with tab5:
-    st.subheader("Core Investment Assumptions & Formulas")
-    st.markdown("""
-    ### 1. Sharpe Ratio Efficiency (25 Points)
-    We assume a fund must earn its returns efficiently. 
-    * **The Hurdle:** A baseline of **0.5** is required.
-    * **The Target:** Full points (25) are reached at a Sharpe of **1.3**.
-    * **The Multiplier (31.25):** There is a **0.8 spread** ($1.3 - 0.5$) between the baseline and the target. To distribute 25 points across this 0.8 range, we use a multiplier of **31.25** ($25 \div 0.8$).
-    * **Formula:** $Score = (Actual Sharpe - 0.5) \\times 31.25$
+# --- 5. TABS INTERFACE ---
+tabs = st.tabs(["📊 Portfolio Review", "🔍 CAS Raw Data", "🗂️ Master Database", "⚖️ Weightage", "🔢 Scoring Logic", "📝 Assumptions"])
 
-    ### 2. Alpha Generation (30 Points)
-    Excess return is the primary performance driver. Full points reached at Alpha 3.0.
-    * **Formula:** $Score = Actual Alpha \\times 10$
-
-    ### 3. Beta / Volatility (15 Points)
-    Lower volatility relative to market is a virtue. Points are awarded in tiers:
-    * **≤ 0.9:** 15 pts | **0.91-1.1:** 8 pts | **1.11-1.2:** 4 pts | **> 1.2:** 0 pts
-
-    ### 4. CAGR Momentum (15 Pts Each)
-    * **3Y CAGR:** 15 pts for $\ge$ 18% | 8 pts for 15-18% | 4 pts for 12-15%
-    * **5Y CAGR:** 15 pts for $\ge$ 15% | 8 pts for 12-15% | 4 pts for 10-12%
-
-    ### 5. Filtering Rules
-    * **Non-Actionable Funds:** Analysis excludes debt, liquid, and unindexed equity funds.
-    """)
-
-# --- TAB 4: LOGIC ---
-with tab4:
-    st.subheader("Numerical Scoring Logic")
-    logic_data = {
-        "Parameter": ["Alpha", "Sharpe", "Beta", "3Y CAGR", "5Y CAGR"],
-        "Max Points": [30, 25, 15, 15, 15],
-        "Zero-Point Hurdle": ["≤ 0.0", "≤ 0.5", "> 1.2", "< 12%", "< 10%"],
-        "Full-Point Target": ["> 3.0", "> 1.3", "≤ 0.9", "> 18%", "> 15%"]
-    }
-    st.table(pd.DataFrame(logic_data))
-
-# --- TAB 3: WEIGHTAGE ---
-with tab3:
-    st.subheader("Weightage Distribution")
-    st.table(pd.DataFrame({
-        "Metric": ["Alpha", "Sharpe Ratio", "Beta", "3Y CAGR", "5Y CAGR"], 
-        "Weight": ["30%", "25%", "15%", "15%", "15%"]
-    }))
-
-# --- TAB 2: MASTER DATABASE ---
-with tab2:
-    st.subheader("Full Database Audit")
-    display_master = master_df.copy()
-    display_master.index = range(1, len(display_master) + 1)
-    st.dataframe(display_master, use_container_width=True)
-
-# --- TAB 1: REVIEW ---
-with tab1:
+with tabs[0]: # Portfolio Review
     uploaded_file = st.file_uploader("Upload CAS PDF", type="pdf")
     if uploaded_file:
-        with st.spinner("Analyzing Actionable Funds..."):
-            holdings = []
+        with st.spinner("Analyzing PDF and cross-referencing Master Database..."):
+            temp_raw = []
             with pdfplumber.open(uploaded_file) as pdf:
                 for page in pdf.pages:
                     words = page.extract_words()
-                    target_x = None
-                    for w in words:
-                        if "VALU" in w['text'].upper():
-                            target_x = (w['x0'] + w['x1']) / 2
-                            break
+                    target_x = next(((w['x0'] + w['x1'])/2 for w in words if "VALU" in w['text'].upper()), None)
                     
                     for w in words:
                         if re.search(r"IN[A-Z0-9]{10}", w['text']):
                             isin = w['text']
+                            y_mid = (w['top'] + w['bottom']) / 2
+                            
+                            # Find Value
+                            fund_val = 0
+                            row_values = [n for n in words if abs(((n['top']+n['bottom'])/2) - y_mid) < 15]
+                            for n in row_values:
+                                clean = n['text'].replace(',', '')
+                                if re.match(r"^\d+\.\d{2}$", clean):
+                                    num = float(clean)
+                                    if target_x and abs(((n['x0']+n['x1'])/2) - target_x) < 80:
+                                        fund_val = num
+                                        break
+                                    elif num > fund_val: fund_val = num
+                            
+                            # Log for Reconciliation Tab
                             match = master_df[master_df['ISIN'] == isin]
+                            status = "Actionable" if not match.empty else "Filtered (Debt/Unindexed)"
+                            name_match = match.iloc[0]['Fund Name'] if not match.empty else "Unknown / Debt Fund"
+                            
+                            temp_raw.append({"ISIN": isin, "Fund Name": name_match, "Value": fund_val, "Status": status})
+                            
                             if not match.empty:
-                                y_mid = (w['top'] + w['bottom']) / 2
-                                fund_val = 0
-                                for n in words:
-                                    if abs(((n['top'] + n['bottom']) / 2) - y_mid) < 15:
-                                        clean = n['text'].replace(',', '')
-                                        if re.match(r"^\d+\.\d{2}$", clean):
-                                            num = float(clean)
-                                            if target_x and abs(((n['x0'] + n['x1']) / 2) - target_x) < 80:
-                                                fund_val = num
-                                                break
-                                            elif num > fund_val: fund_val = num
-                                
-                                res = match.iloc[0]
-                                holdings.append({"Fund": res['Fund Name'], "Score": res['Calculated Score'], "Value": fund_val, "ISIN": isin})
-
-            if holdings:
-                pdf_df = pd.DataFrame(holdings)
-                pdf_df = pdf_df.groupby(['Fund', 'ISIN', 'Score'], as_index=False)['Value'].sum()
+                                actionable_holdings.append({
+                                    "Fund": name_match, 
+                                    "Score": match.iloc[0]['Calculated Score'], 
+                                    "Value": fund_val, 
+                                    "ISIN": isin
+                                })
+            
+            # --- DISPLAY TAB 1 ---
+            if actionable_holdings:
+                pdf_df = pd.DataFrame(actionable_holdings).groupby(['Fund', 'ISIN', 'Score'], as_index=False)['Value'].sum()
                 pdf_df = pdf_df.sort_values(by="Score", ascending=False)
-                
-                total_for_weight = pdf_df['Value'].sum()
-                pdf_df['% Weight'] = pdf_df['Value'].apply(lambda x: round((x/total_for_weight)*100, 2) if total_for_weight > 0 else 0)
                 pdf_df.index = range(1, len(pdf_df) + 1)
+                
+                total_val = pdf_df['Value'].sum()
+                pdf_df['% Weight'] = pdf_df['Value'].apply(lambda x: round((x/total_val)*100, 2) if total_val > 0 else 0)
 
                 st.subheader(f"Equity Portfolio Summary (Actionable Funds: {len(pdf_df)})")
-
+                
                 def color_rows(row):
                     if row.Score >= 90: return ['background-color: #d4edda'] * len(row)
                     elif row.Score < 30: return ['background-color: #f8d7da'] * len(row)
                     elif 30 <= row.Score <= 50: return ['background-color: #fff3cd'] * len(row)
                     else: return [''] * len(row)
 
-                styled_df = pdf_df[['Fund', 'Score', 'Value', '% Weight']].style.apply(color_rows, axis=1).format({'Value': '₹{:,.2f}'})
-                st.dataframe(styled_df, use_container_width=True)
-            else:
-                st.warning("No actionable equity funds found in the PDF mapping.")
+                st.dataframe(pdf_df[['Fund', 'Score', 'Value', '% Weight']].style.apply(color_rows, axis=1).format({'Value': '₹{:,.2f}'}), use_container_width=True)
+            
+            # Store temp_raw in session state for Tab 2
+            st.session_state['raw_data'] = pd.DataFrame(temp_raw).groupby(['ISIN', 'Fund Name', 'Status'], as_index=False)['Value'].sum()
+
+with tabs[1]: # CAS Raw Data (The Reconciliation Tab)
+    st.subheader("CAS Data Reconciliation")
+    st.write("This list shows EVERY ISIN detected in your PDF. Use this to ensure all 59+ holdings were read correctly.")
+    if 'raw_data' in st.session_state:
+        recon_df = st.session_state['raw_data']
+        recon_df.index = range(1, len(recon_df) + 1)
+        st.dataframe(recon_df.style.apply(lambda x: ['background-color: #f0f2f6' if x.Status != 'Actionable' else '' for _ in x], axis=1).format({'Value': '₹{:,.2f}'}), use_container_width=True)
+    else:
+        st.info("Upload a CAS PDF in the first tab to see the reconciliation audit.")
+
+with tabs[2]: # Master Database
+    st.subheader("Master Performance Database")
+    display_db = master_df.copy()
+    display_db.index = range(1, len(display_db) + 1)
+    st.dataframe(display_db, use_container_width=True)
+
+with tabs[3]: # Weightage
+    st.table(pd.DataFrame({"Metric": ["Alpha", "Sharpe", "Beta", "3Y CAGR", "5Y CAGR"], "Weight": ["30%", "25%", "15%", "15%", "15%"]}))
+
+with tabs[4]: # Scoring Logic
+    logic_data = {"Parameter": ["Alpha", "Sharpe", "Beta", "3Y CAGR", "5Y CAGR"], "Max Points": [30, 25, 15, 15, 15], "Hurdle": ["> 0.0", "> 0.5", "< 1.2", "> 12%", "> 10%"]}
+    st.table(pd.DataFrame(logic_data))
+
+with tabs[5]: # Assumptions
+    st.subheader("Investment Assumptions")
+    st.markdown("""
+    1. **Sharpe Multiplier (31.25):** Scaled from 0.8 range (0.5 to 1.3) to 25 points ($25/0.8$).
+    2. **Alpha Multiplier (10):** Scaled to 30 points ($30/3.0$).
+    3. **Actionable Filter:** Any ISIN not in the Master Database is assumed to be Debt/Liquid and is excluded from scoring.
+    4. **CGT Note:** Cost basis and holding periods are not extracted from CAS; tax analysis must be done via separate transaction logs.
+    """)
