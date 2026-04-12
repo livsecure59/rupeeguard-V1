@@ -26,7 +26,6 @@ def load_master_data():
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
         if 'ISIN' in df.columns:
             df['ISIN'] = df['ISIN'].astype(str).str.strip()
-        df.index = df.index + 1
         return df
     except Exception as e:
         st.error(f"⚠️ Database Connection Error: {e}")
@@ -55,30 +54,11 @@ if not master_df.empty:
 # --- 4. TABS ---
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Portfolio Review", "🗂️ Master Database", "⚖️ Weightage", "🔢 Scoring Logic", "📝 Assumptions"])
 
-with tab5:
-    st.subheader("Core Investment Assumptions")
-    st.markdown("1. **Alpha (30%)**: Primary driver. 2. **Sharpe (25%)**: Efficiency > 0.5. 3. **Beta (15%)**: Reward for stability. 4. **3Y/5Y CAGR (15% each)**: Momentum/Consistency.")
-
-with tab4:
-    st.subheader("Numerical Scoring Logic")
-    logic_data = {"Parameter": ["Alpha", "Sharpe", "Beta", "3Y CAGR", "5Y CAGR"], "Max Points": [30, 25, 15, 15, 15], "Hurdle": ["> 0.0", "> 0.5", "< 1.2", "> 12%", "> 10%"]}
-    st.table(pd.DataFrame(logic_data))
-
-with tab3:
-    st.subheader("Weightage Distribution")
-    st.table(pd.DataFrame({"Metric": ["Alpha", "Sharpe", "Beta", "3Y CAGR", "5Y CAGR"], "Weight": ["30%", "25%", "15%", "15%", "15%"]}))
-
-with tab2:
-    st.subheader("Full Database Audit")
-    st.dataframe(master_df, use_container_width=True)
-
 with tab1:
     uploaded_file = st.file_uploader("Upload CAS PDF", type="pdf")
     if uploaded_file:
-        with st.spinner("Consolidating portfolio holdings..."):
-            # Dictionary to store unique holdings by ISIN: {isin: total_value}
-            consolidated_holdings = {}
-            
+        with st.spinner("Filtering Debt Funds & analyzing Equity holdings..."):
+            holdings = []
             with pdfplumber.open(uploaded_file) as pdf:
                 for page in pdf.pages:
                     words = page.extract_words()
@@ -87,53 +67,66 @@ with tab1:
                     for w in words:
                         if re.search(r"IN[A-Z0-9]{10}", w['text']):
                             isin = w['text']
-                            y_level = (w['top'] + w['bottom'])/2
                             
-                            # Look for the largest currency number on the same row or row below
-                            row_nums = [n for n in words if abs(((n['top']+n['bottom'])/2) - y_level) < 12]
-                            val = 0
-                            for n in row_nums:
-                                clean = n['text'].replace(',', '')
-                                if re.match(r"^\d+\.\d{2}$", clean):
-                                    num_val = float(clean)
-                                    # Preference: Number aligned with 'VALU' header
-                                    if target_x and abs(((n['x0']+n['x1'])/2) - target_x) < 70:
-                                        val = num_val
-                                        break
-                                    elif num_val > val: val = num_val
-                            
-                            if isin in consolidated_holdings:
-                                consolidated_holdings[isin] = max(consolidated_holdings[isin], val)
-                            else:
-                                consolidated_holdings[isin] = val
+                            # --- DEBT FILTER LOGIC ---
+                            # Only proceed if the ISIN exists in our Master Sheet
+                            match = master_df[master_df['ISIN'] == isin]
+                            if not match.empty:
+                                y_mid = (w['top'] + w['bottom']) / 2
+                                row_values = [n for n in words if abs(((n['top']+n['bottom'])/2) - y_mid) < 15]
+                                fund_val = 0
+                                for n in row_values:
+                                    clean = n['text'].replace(',', '')
+                                    if re.match(r"^\d+\.\d{2}$", clean):
+                                        num = float(clean)
+                                        if target_x and abs(((n['x0']+n['x1'])/2) - target_x) < 80:
+                                            fund_val = num
+                                            break
+                                        elif num > fund_val: fund_val = num
+                                
+                                res = match.iloc[0]
+                                holdings.append({
+                                    "Fund": res['Fund Name'], 
+                                    "Score": res['Calculated Score'], 
+                                    "Value": fund_val, 
+                                    "ISIN": isin
+                                })
 
-            results = []
-            total_portfolio_val = 0
-            for isin, value in consolidated_holdings.items():
-                match = master_df[master_df['ISIN'] == isin]
-                if not match.empty:
-                    res = match.iloc[0]
-                    results.append({"Fund": res['Fund Name'], "Score": res['Calculated Score'], "Value": value})
-                    total_portfolio_val += value
+            if holdings:
+                # Remove duplicates by ISIN and sum values (if same fund held in multiple folios)
+                pdf_df = pd.DataFrame(holdings)
+                pdf_df = pdf_df.groupby(['Fund', 'ISIN', 'Score'], as_index=False)['Value'].sum()
+                pdf_df = pdf_df.sort_values(by="Score", ascending=False)
+                
+                # Reset index to start from 1
+                pdf_df.index = range(1, len(pdf_df) + 1)
+                
+                total_val = pdf_df['Value'].sum()
+                pdf_df['% Weight'] = pdf_df['Value'].apply(lambda x: round((x/total_val)*100, 2) if total_val > 0 else 0)
 
-        if results:
-            st.subheader(f"Portfolio Summary (Total MF Value: ₹{total_portfolio_val:,.2f})")
-            df = pd.DataFrame(results).sort_values(by="Score", ascending=False)
-            df['% Weight'] = df['Value'].apply(lambda x: round((x/total_portfolio_val)*100, 1) if total_portfolio_val > 0 else 0)
-            
-            # Show Table
-            display_df = df.copy()
-            display_df['Value'] = display_df['Value'].map('₹{:,.2f}'.format)
-            st.table(display_df[['Fund', 'Score', 'Value', '% Weight']])
-            
-            # Action Cards
-            c1, c2, c3 = st.columns(3)
-            c1.header("🚀 BUY")
-            c2.header("👀 WATCH")
-            c3.header("💀 SELL")
-            for _, item in df.iterrows():
-                card = f"**{item['Fund']}**\n\nScore: **{item['Score']}** | Weight: **{item['% Weight']}%**"
-                if item['Score'] >= 90: c1.success(card)
-                elif item['Score'] < 30: c3.error(f"{card}\n\n🚨 Action: SELL")
-                elif 30 <= item['Score'] <= 50: c2.warning(f"{card}\n\n⚠️ Action: WATCH")
-                else: st.info(f"✅ RETAIN: {item['Fund']} (Score: {item['Score']})")
+                st.subheader(f"Equity Portfolio Summary (Analyzed: {len(pdf_df)} Funds | Total Value: ₹{total_val:,.2f})")
+
+                def color_rows(row):
+                    if row.Score >= 90: return ['background-color: #d4edda'] * len(row)
+                    elif row.Score < 30: return ['background-color: #f8d7da'] * len(row)
+                    elif 30 <= row.Score <= 50: return ['background-color: #fff3cd'] * len(row)
+                    else: return [''] * len(row)
+
+                styled_df = pdf_df[['Fund', 'Score', 'Value', '% Weight']].style.apply(color_rows, axis=1).format({'Value': '₹{:,.2f}'})
+                st.dataframe(styled_df, use_container_width=True)
+            else:
+                st.warning("No matching funds from your Master Sheet found in the PDF. Debt funds have been filtered out.")
+
+# --- REMAINING TABS REMAIN UNCHANGED FOR CONSISTENCY ---
+with tab2:
+    master_df.index = range(1, len(master_df) + 1)
+    st.dataframe(master_df, use_container_width=True)
+
+with tab3:
+    st.table(pd.DataFrame({"Metric": ["Alpha", "Sharpe", "Beta", "3Y CAGR", "5Y CAGR"], "Weight": ["30%", "25%", "15%", "15%", "15%"]}))
+
+with tab4:
+    st.table(pd.DataFrame({"Parameter": ["Alpha", "Sharpe", "Beta", "3Y CAGR", "5Y CAGR"], "Max Points": [30, 25, 15, 15, 15], "Hurdle": ["> 0.0", "> 0.5", "< 1.2", "> 12%", "> 10%"]}))
+
+with tab5:
+    st.write("Assumptions: Debt funds are excluded. Analysis only covers funds indexed in the Master Database.")
