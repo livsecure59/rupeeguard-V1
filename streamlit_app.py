@@ -36,18 +36,27 @@ master_df = load_master_data()
 # --- 3. SCORING ENGINE ---
 def get_strict_score(row):
     try:
+        # Alpha (30pts): Max at 3.0. Formula: Alpha * 10
         s_alpha = min(30, max(0, float(row['Alpha']) * 10)) if float(row['Alpha']) > 0 else 0
+        
+        # Sharpe (25pts): Linear reward above 0.5 baseline up to 1.3
+        # Logic: 25 points divided by 0.8 range = 31.25 multiplier
         sharpe = float(row['Sharpe'])
         s_sharpe = min(25, max(0, (sharpe - 0.5) * 31.25)) if sharpe > 0.5 else 0
+        
+        # Beta (15pts): Tiered reward
         beta = float(row['Beta'])
         if beta <= 0.9: s_beta = 15
         elif beta <= 1.1: s_beta = 8
         elif beta <= 1.2: s_beta = 4
         else: s_beta = 0
+        
+        # CAGR (15pts each): Hurdles for 18% (3Y) and 15% (5Y)
         c3y = float(row['3Y CAGR'])
         s_3y = 15 if c3y >= 18 else (8 if c3y >= 15 else (4 if c3y >= 12 else 0))
         c5y = float(row.get('5Y CAGR', row['3Y CAGR']))
         s_5y = 15 if c5y >= 15 else (8 if c5y >= 12 else (4 if c5y >= 10 else 0))
+        
         return round(s_alpha + s_beta + s_sharpe + s_3y + s_5y, 1)
     except: return 0.0
 
@@ -68,16 +77,26 @@ with tab5:
     st.subheader("Core Investment Assumptions & Formulas")
     st.markdown("""
     ### 1. Sharpe Ratio Efficiency (25 Points)
-    Baseline of **0.5** required. 
+    We assume a fund must earn its returns efficiently. 
+    * **The Hurdle:** A baseline of **0.5** is required.
+    * **The Target:** Full points (25) are reached at a Sharpe of **1.3**.
+    * **The Multiplier (31.25):** There is a **0.8 spread** ($1.3 - 0.5$) between the baseline and the target. To distribute 25 points across this 0.8 range, we use a multiplier of **31.25** ($25 \div 0.8$).
     * **Formula:** $Score = (Actual Sharpe - 0.5) \\times 31.25$
+
     ### 2. Alpha Generation (30 Points)
-    **Formula:** $Score = Actual Alpha \\times 10$ (Max at 3.0)
+    Excess return is the primary performance driver. Full points reached at Alpha 3.0.
+    * **Formula:** $Score = Actual Alpha \\times 10$
+
     ### 3. Beta / Volatility (15 Points)
-    * ≤ 0.9: **15 pts** | 0.91-1.1: **8 pts** | 1.11-1.2: **4 pts** | > 1.2: **0 pts**
+    Lower volatility relative to market is a virtue. Points are awarded in tiers:
+    * **≤ 0.9:** 15 pts | **0.91-1.1:** 8 pts | **1.11-1.2:** 4 pts | **> 1.2:** 0 pts
+
     ### 4. CAGR Momentum (15 Pts Each)
-    * **3Y:** 15 pts if ≥ 18% | **5Y:** 15 pts if ≥ 15%
+    * **3Y CAGR:** 15 pts for $\ge$ 18% | 8 pts for 15-18% | 4 pts for 12-15%
+    * **5Y CAGR:** 15 pts for $\ge$ 15% | 8 pts for 12-15% | 4 pts for 10-12%
+
     ### 5. Filtering Rules
-    Only funds indexed in the Master Database are considered 'Actionable'. Debt and liquid funds are filtered out.
+    * **Non-Actionable Funds:** Analysis excludes debt, liquid, and unindexed equity funds.
     """)
 
 # --- TAB 4: LOGIC ---
@@ -94,7 +113,10 @@ with tab4:
 # --- TAB 3: WEIGHTAGE ---
 with tab3:
     st.subheader("Weightage Distribution")
-    st.table(pd.DataFrame({"Metric": ["Alpha", "Sharpe", "Beta", "3Y CAGR", "5Y CAGR"], "Weight": ["30%", "25%", "15%", "15%", "15%"]}))
+    st.table(pd.DataFrame({
+        "Metric": ["Alpha", "Sharpe Ratio", "Beta", "3Y CAGR", "5Y CAGR"], 
+        "Weight": ["30%", "25%", "15%", "15%", "15%"]
+    }))
 
 # --- TAB 2: MASTER DATABASE ---
 with tab2:
