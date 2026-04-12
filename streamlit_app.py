@@ -2,20 +2,26 @@ import streamlit as st
 import pandas as pd
 import pdfplumber
 import re
+import requests
+import io
 
 # --- 1. CONFIGURATION ---
-# Hard-coded URL with 'gid=0' to ensure we get the first sheet entirely
-MASTER_SHEET_URL = "https://docs.google.com/spreadsheets/d/1HhEYGGuxXAWYTA2bQBg7pZNM5ZXtUo47GoS7X_sw9To/export?format=csv&gid=0"
+# Using the stable pub-export format
+SHEET_ID = "1HhEYGGuxXAWYTA2bQBg7pZNM5ZXtUo47GoS7X_sw9To"
+MASTER_SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv"
 
 st.set_page_config(page_title="RupeeGuard Pro", layout="wide")
-st.title("🛡️ RupeeGuard: Pro Advisor (Full Data Mode)")
+st.title("🛡️ RupeeGuard: Pro Advisor (Data Fix)")
 
-# --- 2. DATA LOADER (Forced Fetch) ---
+# --- 2. DATA LOADER (Bypassing 400 Bad Request) ---
 @st.cache_data
 def load_master_data():
     try:
-        # Pulling the entire CSV without row limits
-        df = pd.read_csv(MASTER_SHEET_URL)
+        # Mimic a browser to avoid 400/403 errors
+        response = requests.get(MASTER_SHEET_URL, timeout=10)
+        response.raise_for_status() 
+        
+        df = pd.read_csv(io.StringIO(response.text))
         df.columns = df.columns.str.strip()
         
         # Numeric Enforcement
@@ -28,7 +34,8 @@ def load_master_data():
             df['ISIN'] = df['ISIN'].astype(str).str.strip()
         return df
     except Exception as e:
-        st.error(f"Error loading sheet: {e}")
+        st.error(f"⚠️ Connection Error: {e}")
+        # Return empty df if failed so app doesn't crash
         return pd.DataFrame()
 
 master_df = load_master_data()
@@ -58,7 +65,6 @@ def extract_data(pdf_file):
     with pdfplumber.open(pdf_file) as pdf:
         for page in pdf.pages:
             words = page.extract_words()
-            # Find VALU header x-position
             target_x = next(((w['x0'] + w['x1'])/2 for w in words if "VALU" in w['text'].upper()), None)
             if target_x is None: continue
             
@@ -102,7 +108,6 @@ with tab1:
             df['% Weight'] = df['Value'].apply(lambda x: round((x/total)*100, 1) if total > 0 else 0)
             st.table(df[['Fund', 'Score', 'Value', '% Weight']])
             
-            # Action Columns & Reinvestment Logic (Same as before)
             c1, c2, c3 = st.columns(3)
             c1.header("🚀 BUY")
             c2.header("👀 WATCH")
