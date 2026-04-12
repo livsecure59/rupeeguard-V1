@@ -40,7 +40,10 @@ def get_strict_score(row):
         sharpe = float(row['Sharpe'])
         s_sharpe = min(25, max(0, (sharpe - 0.5) * 31.25)) if sharpe > 0.5 else 0
         beta = float(row['Beta'])
-        s_beta = 15 if beta <= 0.9 else (8 if beta <= 1.1 else (4 if beta <= 1.2 else 0))
+        if beta <= 0.9: s_beta = 15
+        elif beta <= 1.1: s_beta = 8
+        elif beta <= 1.2: s_beta = 4
+        else: s_beta = 0
         c3y = float(row['3Y CAGR'])
         s_3y = 15 if c3y >= 18 else (8 if c3y >= 15 else (4 if c3y >= 12 else 0))
         c5y = float(row.get('5Y CAGR', row['3Y CAGR']))
@@ -60,6 +63,7 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📝 Assumptions"
 ])
 
+# --- TAB 5: ASSUMPTIONS ---
 with tab5:
     st.subheader("Core Investment Assumptions & Formulas")
     st.markdown("""
@@ -76,6 +80,7 @@ with tab5:
     Only funds indexed in the Master Database are considered 'Actionable'. Debt and liquid funds are filtered out.
     """)
 
+# --- TAB 4: LOGIC ---
 with tab4:
     st.subheader("Numerical Scoring Logic")
     logic_data = {
@@ -86,16 +91,19 @@ with tab4:
     }
     st.table(pd.DataFrame(logic_data))
 
+# --- TAB 3: WEIGHTAGE ---
 with tab3:
     st.subheader("Weightage Distribution")
     st.table(pd.DataFrame({"Metric": ["Alpha", "Sharpe", "Beta", "3Y CAGR", "5Y CAGR"], "Weight": ["30%", "25%", "15%", "15%", "15%"]}))
 
+# --- TAB 2: MASTER DATABASE ---
 with tab2:
     st.subheader("Full Database Audit")
     display_master = master_df.copy()
     display_master.index = range(1, len(display_master) + 1)
     st.dataframe(display_master, use_container_width=True)
 
+# --- TAB 1: REVIEW ---
 with tab1:
     uploaded_file = st.file_uploader("Upload CAS PDF", type="pdf")
     if uploaded_file:
@@ -137,4 +145,17 @@ with tab1:
                 
                 total_for_weight = pdf_df['Value'].sum()
                 pdf_df['% Weight'] = pdf_df['Value'].apply(lambda x: round((x/total_for_weight)*100, 2) if total_for_weight > 0 else 0)
-                pdf_
+                pdf_df.index = range(1, len(pdf_df) + 1)
+
+                st.subheader(f"Equity Portfolio Summary (Actionable Funds: {len(pdf_df)})")
+
+                def color_rows(row):
+                    if row.Score >= 90: return ['background-color: #d4edda'] * len(row)
+                    elif row.Score < 30: return ['background-color: #f8d7da'] * len(row)
+                    elif 30 <= row.Score <= 50: return ['background-color: #fff3cd'] * len(row)
+                    else: return [''] * len(row)
+
+                styled_df = pdf_df[['Fund', 'Score', 'Value', '% Weight']].style.apply(color_rows, axis=1).format({'Value': '₹{:,.2f}'})
+                st.dataframe(styled_df, use_container_width=True)
+            else:
+                st.warning("No actionable equity funds found in the PDF mapping.")
