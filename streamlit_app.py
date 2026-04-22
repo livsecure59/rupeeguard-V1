@@ -61,31 +61,23 @@ with tab1:
     uploaded_file = st.file_uploader("Upload CAS PDF", type="pdf")
     if uploaded_file:
         portfolio_map = {}
-        recon_data = []
-        
         with pdfplumber.open(uploaded_file) as pdf:
             for page in pdf.pages:
                 words = page.extract_words()
                 target_x = next(((w['x0'] + w['x1'])/2 for w in words if "VALU" in w['text'].upper()), None)
-                
                 for w in words:
-                    # Strict 12-character ISIN check
                     if re.match(r"^IN[A-Z0-9]{10}$", w['text']):
                         isin = w['text']
                         y = (w['top'] + w['bottom'])/2
                         best_val = 0
-                        
                         line_nums = [n for n in words if abs(((n['top']+n['bottom'])/2) - y) < 6]
                         for n in line_nums:
                             clean = n['text'].replace(',', '')
                             if re.match(r"^\d+\.\d{2}$", clean):
                                 num_val = float(clean)
                                 if target_x and abs(((n['x0']+n['x1'])/2) - target_x) < 75:
-                                    best_val = num_val
-                                    break
-                                elif num_val > best_val:
-                                    best_val = num_val
-                        
+                                    best_val = num_val; break
+                                elif num_val > best_val: best_val = num_val
                         portfolio_map[isin] = portfolio_map.get(isin, 0) + best_val
 
         final_list = []
@@ -97,10 +89,9 @@ with tab1:
                 res = match.iloc[0]
                 final_list.append({"Fund": res['Fund Name'], "Score": res['Calculated Score'], "Value": val})
                 total_sum += val
-                temp_recon.append({"ISIN": isin, "Name": res['Fund Name'], "Status": "Matched", "Value": val})
+                temp_recon.append({"ISIN": isin, "Fund Name": res['Fund Name'], "Status": "Matched", "Value": val})
             else:
-                temp_recon.append({"ISIN": isin, "Name": "Unknown/Debt", "Status": "Filtered", "Value": val})
-        
+                temp_recon.append({"ISIN": isin, "Fund Name": "Unknown / Unindexed", "Status": "Filtered", "Value": val})
         st.session_state['recon'] = temp_recon
 
         if final_list:
@@ -108,7 +99,6 @@ with tab1:
             df = pd.DataFrame(final_list).sort_values(by="Score", ascending=False)
             df.insert(0, 'Sr No.', range(1, len(df) + 1))
             df['% Weight'] = df['Value'].apply(lambda x: round((x/total_sum)*100, 2) if total_sum > 0 else 0)
-            
             disp = df.copy()
             disp['Value'] = disp['Value'].map('₹{:,.2f}'.format)
             st.table(disp[['Sr No.', 'Fund', 'Score', 'Value', '% Weight']])
@@ -122,28 +112,49 @@ with tab1:
                 elif 30 <= item['Score'] <= 50: c2.warning(f"{card}\n\n⚠️ WATCH")
                 else: st.info(f"✅ RETAIN: {item['Fund']}")
 
+with tab6:
+    st.subheader("CAS Reconciliation Log")
+    st.info("**Note on Status:**\n- **Matched:** The ISIN was found in your Google Sheet. It is included in the scoring.\n- **Filtered:** The ISIN is not in your Google Sheet. This usually includes Debt funds, Stocks, or unindexed Mutual Funds.")
+    if 'recon' in st.session_state:
+        st.dataframe(pd.DataFrame(st.session_state['recon']), use_container_width=True)
+
+with tab5:
+    st.subheader("Investment Assumptions & Detailed Scoring Math")
+    st.markdown("""
+    ### 1. Alpha (Weight: 30%)
+    - **Logic:** Alpha represents the fund manager's ability to generate returns above the benchmark. 
+    - **Math:** We multiply the Alpha value by **10**.
+    - **Example:** An Alpha of **1.4** results in **14 points**. An Alpha of **3.0 or higher** hits the maximum cap of **30 points**.
+    - **Hurdle:** Any Alpha ≤ 0 receives **0 points**.
+
+    ### 2. Sharpe Ratio (Weight: 25%)
+    - **Logic:** This measures risk-adjusted return. We only reward efficiency that exceeds a baseline of **0.5**.
+    - **Math:** `(Sharpe - 0.5) * 31.25`. 
+    - **Example:** A Sharpe of **1.3** gives exactly **25 points**.
+    - **Hurdle:** Any Sharpe ≤ 0.5 receives **0 points**.
+
+    ### 3. Beta (Weight: 15%)
+    - **Logic:** Beta measures volatility relative to the market. Lower Beta (≤ 0.9) is preferred for stability.
+    - **Tiers:**
+        - **≤ 0.9:** 15 points (Maximum Reward)
+        - **0.91 to 1.1:** 8 points
+        - **1.11 to 1.2:** 4 points
+        - **> 1.2:** 0 points (High Volatility Penalty)
+
+    ### 4. 3Y CAGR (Weight: 15%)
+    - **Logic:** Measures medium-term momentum. 
+    - **Hurdle:** 18%+ = **15 pts** | 15% to 18% = **8 pts** | 12% to 15% = **4 pts** | <12% = **0 pts**.
+
+    ### 5. 5Y CAGR (Weight: 15%)
+    - **Logic:** Measures long-term consistency.
+    - **Hurdle:** 15%+ = **15 pts** | 12% to 15% = **8 pts** | 10% to 12% = **4 pts** | <10% = **0 pts**.
+    """)
+
 with tab2:
-    st.subheader("Master Database")
     st.dataframe(master_df, use_container_width=True)
 
 with tab3:
-    st.subheader("Weightage")
     st.table(pd.DataFrame({"Metric": ["Alpha", "Sharpe", "Beta", "3Y CAGR", "5Y CAGR"], "Weight": ["30%", "25%", "15%", "15%", "15%"]}))
 
 with tab4:
-    st.subheader("Scoring Logic")
     st.table(pd.DataFrame({"Param": ["Alpha", "Sharpe", "Beta", "3Y", "5Y"], "Max Points": [30, 25, 15, 15, 15], "Hurdle": [">0", ">0.5", "<1.2", ">18%", ">15%"]}))
-
-with tab5:
-    st.subheader("Investment Assumptions")
-    st.markdown("""
-    - **Alpha (30%):** Excess return multiplier (Value x 10).
-    - **Sharpe (25%):** Efficiency reward (Value - 0.5) x 31.25.
-    - **Beta (15%):** Tiered risk score (15/8/4/0).
-    - **Growth (30%):** Performance hurdles for 3Y and 5Y CAGR.
-    """)
-
-with tab6:
-    st.subheader("CAS Reconciliation")
-    if 'recon' in st.session_state:
-        st.dataframe(pd.DataFrame(st.session_state['recon']), use_container_width=True)
