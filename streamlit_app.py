@@ -16,7 +16,7 @@ st.title("🛡️ RupeeGuard: Professional Advisor Portal")
 @st.cache_data
 def load_master_data():
     try:
-        response = requests.get(MASTER_SHEET_URL, timeout=10)
+        response = requests.get(MASTER_SHEET_URL, timeout=15)
         response.raise_for_status() 
         df = pd.read_csv(io.StringIO(response.text))
         df.columns = df.columns.str.strip()
@@ -50,7 +50,6 @@ def get_strict_score(row):
 
 if not master_df.empty:
     master_df['Calculated Score'] = master_df.apply(get_strict_score, axis=1)
-    top_picks = master_df.sort_values(by='Calculated Score', ascending=False).head(3)
 
 # --- 4. TABS ---
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
@@ -58,65 +57,54 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "🔢 Scoring Logic", "📝 Assumptions", "🔍 CAS Reconciliation"
 ])
 
-# Use session state to keep data across tabs
-if 'recon_data' not in st.session_state: st.session_state.recon_data = []
-if 'portfolio_results' not in st.session_state: st.session_state.portfolio_results = []
-if 'total_val' not in st.session_state: st.session_state.total_val = 0
-
 with tab1:
     uploaded_file = st.file_uploader("Upload CAS PDF", type="pdf")
     if uploaded_file:
         portfolio_map = {}
-        recon_accumulator = []
+        recon_data = []
         
         with pdfplumber.open(uploaded_file) as pdf:
             for page in pdf.pages:
                 words = page.extract_words()
-                # Locate 'VALU' header to find the correct column
                 target_x = next(((w['x0'] + w['x1'])/2 for w in words if "VALU" in w['text'].upper()), None)
                 
                 for w in words:
-                    # Catch any ISIN-like string (12 chars)
-                    if re.search(r"[A-Z0-9]{12}", w['text']):
+                    # Strict 12-character ISIN check
+                    if re.match(r"^IN[A-Z0-9]{10}$", w['text']):
                         isin = w['text']
                         y = (w['top'] + w['bottom'])/2
-                        
-                        # Grab numbers on the same line
-                        row_nums = []
-                        for n in words:
-                            if abs(((n['top']+n['bottom'])/2) - y) < 6:
-                                clean = n['text'].replace(',', '')
-                                if re.match(r"^\d+\.\d{2}$", clean):
-                                    # Calculate distance to 'VALU' header
-                                    dist = abs(((n['x0']+n['x1'])/2) - target_x) if target_x else 999
-                                    row_nums.append({'val': float(clean), 'dist': dist})
-                        
-                        # Select best value: closest to 'VALU' header, else largest on line
                         best_val = 0
-                        if row_nums:
-                            row_nums.sort(key=lambda x: x['dist'])
-                            best_val = row_nums[0]['val']
                         
-                        # Consolidate duplicate ISINs
+                        line_nums = [n for n in words if abs(((n['top']+n['bottom'])/2) - y) < 6]
+                        for n in line_nums:
+                            clean = n['text'].replace(',', '')
+                            if re.match(r"^\d+\.\d{2}$", clean):
+                                num_val = float(clean)
+                                if target_x and abs(((n['x0']+n['x1'])/2) - target_x) < 75:
+                                    best_val = num_val
+                                    break
+                                elif num_val > best_val:
+                                    best_val = num_val
+                        
                         portfolio_map[isin] = portfolio_map.get(isin, 0) + best_val
 
-        # Map to Master Sheet
         final_list = []
         total_sum = 0
-        st.session_state.recon_data = []
-        
+        temp_recon = []
         for isin, val in portfolio_map.items():
             match = master_df[master_df['ISIN'] == isin]
             if not match.empty:
                 res = match.iloc[0]
                 final_list.append({"Fund": res['Fund Name'], "Score": res['Calculated Score'], "Value": val})
                 total_sum += val
-                st.session_state.recon_data.append({"ISIN": isin, "Name": res['Fund Name'], "Status": "Matched", "Value": val})
+                temp_recon.append({"ISIN": isin, "Name": res['Fund Name'], "Status": "Matched", "Value": val})
             else:
-                st.session_state.recon_data.append({"ISIN": isin, "Name": "Unknown / Debt", "Status": "Filtered", "Value": val})
+                temp_recon.append({"ISIN": isin, "Name": "Unknown/Debt", "Status": "Filtered", "Value": val})
+        
+        st.session_state['recon'] = temp_recon
 
         if final_list:
-            st.subheader(f"Equity Portfolio Summary (Total: ₹{total_sum:,.2f})")
+            st.subheader(f"Portfolio Summary (Total: ₹{total_sum:,.2f})")
             df = pd.DataFrame(final_list).sort_values(by="Score", ascending=False)
             df.insert(0, 'Sr No.', range(1, len(df) + 1))
             df['% Weight'] = df['Value'].apply(lambda x: round((x/total_sum)*100, 2) if total_sum > 0 else 0)
@@ -126,9 +114,7 @@ with tab1:
             st.table(disp[['Sr No.', 'Fund', 'Score', 'Value', '% Weight']])
             
             c1, c2, c3 = st.columns(3)
-            c1.header("🚀 BUY (90+)")
-            c2.header("👀 WATCH (30-50)")
-            c3.header("💀 SELL (<30)")
+            c1.header("🚀 BUY (90+)"); c2.header("👀 WATCH (30-50)"); c3.header("💀 SELL (<30)")
             for _, item in df.iterrows():
                 card = f"**{item['Fund']}**\n\nScore: **{item['Score']}** | Weight: **{item['% Weight']}%**"
                 if item['Score'] >= 90: c1.success(card)
@@ -136,27 +122,28 @@ with tab1:
                 elif 30 <= item['Score'] <= 50: c2.warning(f"{card}\n\n⚠️ WATCH")
                 else: st.info(f"✅ RETAIN: {item['Fund']}")
 
-with tab6:
-    st.subheader("CAS Data Reconciliation")
-    st.write("This shows every ISIN detected. Use this to find why funds might be missing.")
-    if st.session_state.recon_data:
-        st.dataframe(pd.DataFrame(st.session_state.recon_data), use_container_width=True)
-
-with tab5:
-    st.subheader("Detailed Investment Assumptions")
-    st.markdown("""
-    - **Alpha (30%):** Calculated as (Alpha * 10). Max 30 points at 3.0 Alpha.
-    - **Sharpe (25%):** Reward efficiency > 0.5. Calculated as (Sharpe - 0.5) * 31.25.
-    - **Beta (15%):** Tiered scoring (15 pts for ≤ 0.9, 8 pts for ≤ 1.1, 4 pts for ≤ 1.2).
-    - **3Y CAGR (15%):** Hurdle based (15 pts for > 18%, 8 pts for > 15%).
-    - **5Y CAGR (15%):** Hurdle based (15 pts for > 15%, 8 pts for > 12%).
-    """)
-
 with tab2:
+    st.subheader("Master Database")
     st.dataframe(master_df, use_container_width=True)
 
 with tab3:
+    st.subheader("Weightage")
     st.table(pd.DataFrame({"Metric": ["Alpha", "Sharpe", "Beta", "3Y CAGR", "5Y CAGR"], "Weight": ["30%", "25%", "15%", "15%", "15%"]}))
 
 with tab4:
-    st.table(pd.DataFrame({"Param": ["Alpha", "Sharpe", "Beta", "3Y", "5Y"], "Full Pts Target": [">3.0", ">1.3", "<0.9", ">18%", ">15%"], "Zero Hurdle": ["<0", "<0.5", ">1.2", "<12%", "<10%"]}))
+    st.subheader("Scoring Logic")
+    st.table(pd.DataFrame({"Param": ["Alpha", "Sharpe", "Beta", "3Y", "5Y"], "Max Points": [30, 25, 15, 15, 15], "Hurdle": [">0", ">0.5", "<1.2", ">18%", ">15%"]}))
+
+with tab5:
+    st.subheader("Investment Assumptions")
+    st.markdown("""
+    - **Alpha (30%):** Excess return multiplier (Value x 10).
+    - **Sharpe (25%):** Efficiency reward (Value - 0.5) x 31.25.
+    - **Beta (15%):** Tiered risk score (15/8/4/0).
+    - **Growth (30%):** Performance hurdles for 3Y and 5Y CAGR.
+    """)
+
+with tab6:
+    st.subheader("CAS Reconciliation")
+    if 'recon' in st.session_state:
+        st.dataframe(pd.DataFrame(st.session_state['recon']), use_container_width=True)
